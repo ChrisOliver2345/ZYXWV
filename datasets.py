@@ -10,6 +10,8 @@ import re
 import os
 from utils import Preprocessor, Binning
 import numpy as np
+from typing import List, Tuple, Dict, Union, Optional
+
 
 def load_data(args):
     modal_a_path = "./Datasets/" + args.dateset + "/" + args.modal_a_file
@@ -77,9 +79,9 @@ def preprocess_data(modal_a_adata, modal_b_adata, args):
             rp_score_matrix.to_hdf(cache_file, key='rp_score', mode='w')
             print(f"Saved RP score matrix to {cache_file}")
 
-    adata_a_lm = modal_a_adata
+    adata_a = modal_a_adata
 
-    adata_b_lm = ad.AnnData(
+    adata_b = ad.AnnData(
         X=rp_score_matrix.values,
         obs=modal_b_adata.obs.loc[rp_score_matrix.index],
         var=pd.DataFrame(index=rp_score_matrix.columns)
@@ -111,23 +113,57 @@ def preprocess_data(modal_a_adata, modal_b_adata, args):
         hvg_flavor="seurat_v3" if data_is_raw else "cell_ranger"
     )
 
-    adata_a_lm = preprocessor_a(adata_a_lm, batch_key=None)
+    adata_a = preprocessor_a(adata_a, batch_key=None)
 
-    common_genes = np.intersect1d(adata_a_lm.var_names, adata_b_lm.var_names)
-    adata_a_lm = adata_a_lm[:, common_genes].copy()
-    adata_b_lm = adata_b_lm[:, common_genes].copy()
+    common_genes = np.intersect1d(adata_a.var_names, adata_b.var_names)
+    adata_a = adata_a[:, common_genes].copy()
+    adata_b = adata_b[:, common_genes].copy()
 
-    adata_b_lm = preprocessor_b(adata_b_lm, batch_key=None)
+    adata_b = preprocessor_b(adata_b, batch_key=None)
 
-    hvg_a = adata_a_lm.var[adata_a_lm.var['highly_variable']].index
-    hvg_b = adata_b_lm.var[adata_b_lm.var['highly_variable']].index
+    hvg_a = adata_a.var[adata_a.var['highly_variable']].index
+    hvg_b = adata_b.var[adata_b.var['highly_variable']].index
     hvg_union = np.union1d(hvg_a, hvg_b)
 
-    adata_a_lm = adata_a_lm[:, hvg_union].copy()
-    adata_b_lm = adata_b_lm[:, hvg_union].copy()
+    adata_a = adata_a[:, hvg_union].copy()
+    adata_b = adata_b[:, hvg_union].copy()
 
     binning = Binning(binning=args.n_bins, result_binned_key="X_binned")
 
-    adata_a_bin, adata_b_bin = binning(adata_a_lm, adata_b_lm)
+    adata_a_bin, adata_b_bin = binning(adata_a, adata_b)
 
-    return adata_a_lm, adata_b_lm
+    celltype_id_labels = adata_a_bin.obs["cell_type"].astype("category").cat.codes.values
+    celltypes = adata_a_bin.obs["cell_type"].unique()
+    num_types = len(np.unique(celltype_id_labels))
+    id2type = dict(enumerate(adata_a_bin.obs["cell_type"].astype("category").cat.categories))
+    adata_a_bin.obs["celltype_id"] = celltype_id_labels
+    adata_b_bin.obs["celltype_id"] = celltype_id_labels
+
+    return adata_a_bin, adata_b_bin
+
+
+def prepare_data(tokenized_train, tokenized_test, train_celltype_labels, test_celltype_labels):
+
+    input_values_train = tokenized_train["values"]
+    input_values_test = tokenized_test["values"]
+
+    input_gene_ids_train, input_gene_ids_test = (
+        tokenized_train["genes"],
+        tokenized_test["genes"],
+    )
+
+    tensor_celltype_labels_train = torch.from_numpy(train_celltype_labels).long()
+    tensor_celltype_labels_test = torch.from_numpy(test_celltype_labels).long()
+
+    train_data_pt = {
+        "gene_ids": input_gene_ids_train,
+        "values": input_values_train,
+        "celltype_labels": tensor_celltype_labels_train,
+    }
+    test_data_pt = {
+        "gene_ids": input_gene_ids_test,
+        "values": input_values_test,
+        "celltype_labels": tensor_celltype_labels_test,
+    }
+
+    return train_data_pt, test_data_pt

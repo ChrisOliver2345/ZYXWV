@@ -3,7 +3,7 @@ import torch
 import argparse
 from tqdm import tqdm
 from torch import optim
-from datasets import load_data, SCDataset, preprocess_data, prepare_data
+from datasets import load_data, SCDataset, preprocess_data, prepare_data, prepare_dataloader
 from sklearn.model_selection import KFold
 from utils import set_seed
 from torchtext.vocab import Vocab
@@ -11,6 +11,8 @@ from torchtext._torchtext import (Vocab as VocabPybind,)
 import numpy as np
 from tokenizer import tokenize_and_pad_batch
 import time
+from model import Gene_Transformer
+import torch.nn as nn
 
 def prepare():
     parser = argparse.ArgumentParser()
@@ -27,11 +29,13 @@ def prepare():
     parser.add_argument('--folds', type=int, default=5, help='')
     parser.add_argument('--d_model', type=int, default=256, help='')
     parser.add_argument('--num_heads', type=int, default=2, help='')
-    parser.add_argument('--d_ff', type=int, default=1024, help='')
+    parser.add_argument('--d_embd', type=int, default=128, help='')
+    parser.add_argument('--d_ff', type=int, default=128, help='')
     parser.add_argument("--n_bins", type=int, default=5, help='')
     parser.add_argument("--seed", type=int, default=2025, help='')
     parser.add_argument('--max_seq_len', type=int, default=2048, help='')
     parser.add_argument('--include_zero_gene', type=bool, default=True, help='')
+    parser.add_argument('--dropout', type=float, default=0.2, help='')
 
 
     args = parser.parse_args()
@@ -45,7 +49,7 @@ def run():
 
     modal_a_adata, modal_b_adata = load_data(args)
 
-    adata_a, adata_b = preprocess_data(modal_a_adata, modal_b_adata, args)
+    adata_a, adata_b, num_types = preprocess_data(modal_a_adata, modal_b_adata, args)
 
     count_a = adata_a.layers["X_binned"]
     count_b = adata_b.layers["X_binned"]
@@ -86,7 +90,8 @@ def run():
     vocab = Vocab(VocabPybind(genes + special_tokens, None))
     vocab.set_default_index(vocab["<pad>"])
     gene_ids = np.array(vocab(genes), dtype=int)
-    pad_value = -1
+    pad_value = args.n_bins
+    n_input_bins = args.n_bins + 1
 
     for i, split in enumerate(splits):
         print(f"Fold {i + 1}:")
@@ -135,6 +140,26 @@ def run():
             include_zero_gene=args.include_zero_gene,
         )
 
+        model = Gene_Transformer(
+            args=args,
+            ntoken=len(vocab),
+            d_model=args.d_embd,
+            nhead=args.num_heads,
+            d_hid=args.d_ff,
+            vocab=vocab,
+            dropout=args.dropout,
+            pad_token=pad_token,
+            pad_value=pad_value,
+            n_input_bins=n_input_bins,
+            nlayers=2,
+            n_cls=num_types
+        )
+
+        model.to(args.device)
+        criterion_cls = nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, eps=1e-4)
+
+
         for epoch in range(1, args.n_epochs + 1):
             epoch_start_time = time.time()
             train_data_pt, valid_data_pt = prepare_data(tokenized_train=tokenized_train,
@@ -142,6 +167,23 @@ def run():
                                                         train_celltype_labels=train_celltypes,
                                                         test_celltype_labels=test_celltypes
                                                         )
+
+            train_loader = prepare_dataloader(
+                train_data_pt,
+                batch_size=args.train_batch_size,
+                shuffle=False,
+                intra_domain_shuffle=True,
+                drop_last=False,
+            )
+            test_loader = prepare_dataloader(
+                valid_data_pt,
+                batch_size=args.test_batch_size,
+                shuffle=False,
+                intra_domain_shuffle=False,
+                drop_last=False,
+            )
+
+
 
             sys.exit()
 

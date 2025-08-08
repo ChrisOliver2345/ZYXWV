@@ -139,7 +139,7 @@ def preprocess_data(modal_a_adata, modal_b_adata, args):
     adata_a_bin.obs["celltype_id"] = celltype_id_labels
     adata_b_bin.obs["celltype_id"] = celltype_id_labels
 
-    return adata_a_bin, adata_b_bin
+    return adata_a_bin, adata_b_bin, num_types
 
 
 def prepare_data(tokenized_train, tokenized_test, train_celltype_labels, test_celltype_labels):
@@ -167,3 +167,38 @@ def prepare_data(tokenized_train, tokenized_test, train_celltype_labels, test_ce
     }
 
     return train_data_pt, test_data_pt
+
+
+# data_loader
+def prepare_dataloader(
+    data_pt: Dict[str, torch.Tensor],
+    batch_size: int,
+    shuffle: bool = False,
+    intra_domain_shuffle: bool = False,
+    drop_last: bool = False,
+    num_workers: int = 4,
+) -> DataLoader:
+
+    dataset = SeqDataset(data_pt)
+
+    data_loader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        num_workers=num_workers,
+        pin_memory=True,
+    )
+    return data_loader
+
+
+# dataset
+class SeqDataset(Dataset):
+    def __init__(self, data: Dict[str, torch.Tensor]):
+        self.data = data
+
+    def __len__(self):
+        return self.data["gene_ids"].shape[0]
+
+    def __getitem__(self, idx):
+        return {k: v[idx] for k, v in self.data.items()}
